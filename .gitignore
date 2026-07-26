@@ -1,0 +1,23 @@
+# Python
+backend/venv/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+backend/.env
+backend/.pytest_cache/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+
+# OS
+**/.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Learning docs (personal notes, not part of the app)
+docs/

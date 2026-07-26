@@ -1,7 +1,10 @@
+import time
+
 from groq import AsyncGroq
 from fastapi import HTTPException, status
 
 from app.config import settings
+from app.utils.logging import logger
 
 _client: AsyncGroq | None = None
 
@@ -13,6 +16,21 @@ def get_client() -> AsyncGroq:
             raise RuntimeError("GROQ_API_KEY is not set in .env")
         _client = AsyncGroq(api_key=settings.groq_api_key)
     return _client
+
+
+def _log_llm(fn_name: str, start: float, response=None, error: Exception | None = None) -> None:
+    duration_ms = round((time.perf_counter() - start) * 1000)
+    extra: dict = {"llm_fn": fn_name, "duration_ms": duration_ms, "model": "llama-3.1-8b-instant"}
+    if response:
+        usage = getattr(response, "usage", None)
+        if usage:
+            extra["prompt_tokens"] = usage.prompt_tokens
+            extra["completion_tokens"] = usage.completion_tokens
+    if error:
+        extra["error"] = str(error)
+        logger.warning(f"LLM call failed: {fn_name}", extra=extra)
+    else:
+        logger.info(f"LLM call: {fn_name}", extra=extra)
 
 
 async def rank_similar_books(
@@ -30,6 +48,7 @@ async def rank_similar_books(
         for c in candidates
     )
 
+    t0 = time.perf_counter()
     try:
         response = await get_client().chat.completions.create(
             model="llama-3.1-8b-instant",
@@ -54,10 +73,11 @@ async def rank_similar_books(
                 },
             ],
         )
+        _log_llm("rank_similar_books", t0, response)
         raw = response.choices[0].message.content.strip()
         return [int(x.strip()) for x in raw.split(",") if x.strip().isdigit()][:limit]
-    except Exception:
-        # Fallback: return candidates in original order
+    except Exception as exc:
+        _log_llm("rank_similar_books", t0, error=exc)
         return [c["id"] for c in candidates[:limit]]
 
 
@@ -78,6 +98,7 @@ async def generate_reading_insights(
     if currently_reading:
         lines.append(f"Currently reading: {currently_reading}")
 
+    t0 = time.perf_counter()
     try:
         response = await get_client().chat.completions.create(
             model="llama-3.1-8b-instant",
@@ -99,8 +120,10 @@ async def generate_reading_insights(
                 },
             ],
         )
+        _log_llm("generate_reading_insights", t0, response)
         return response.choices[0].message.content.strip()
-    except Exception:
+    except Exception as exc:
+        _log_llm("generate_reading_insights", t0, error=exc)
         return "Keep reading — your insights will appear here as your library grows."
 
 
@@ -114,6 +137,7 @@ async def generate_why_explanation(
     rated_str = ", ".join(top_rated) if top_rated else "no rated books yet"
     genres_str = ", ".join(top_genres) if top_genres else "no clear genre preference yet"
 
+    t0 = time.perf_counter()
     try:
         response = await get_client().chat.completions.create(
             model="llama-3.1-8b-instant",
@@ -139,14 +163,16 @@ async def generate_why_explanation(
                 },
             ],
         )
+        _log_llm("generate_why_explanation", t0, response)
         return response.choices[0].message.content.strip()
-    except Exception:
-        return f"Recommended based on your reading taste."
+    except Exception as exc:
+        _log_llm("generate_why_explanation", t0, error=exc)
+        return "Recommended based on your reading taste."
 
 
 async def generate_book_summary(title: str, authors: str, description: str) -> str:
     truncated = description[:500].rsplit(" ", 1)[0] if len(description) > 500 else description
-
+    t0 = time.perf_counter()
     try:
         response = await get_client().chat.completions.create(
             model="llama-3.1-8b-instant",
@@ -167,8 +193,10 @@ async def generate_book_summary(title: str, authors: str, description: str) -> s
                 },
             ],
         )
+        _log_llm("generate_book_summary", t0, response)
         return response.choices[0].message.content
     except Exception as e:
+        _log_llm("generate_book_summary", t0, error=e)
         err = str(e).lower()
         if "authentication" in err or "api key" in err:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="AI service not configured")

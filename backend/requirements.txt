@@ -28,6 +28,9 @@ groq==1.6.0               # Groq SDK — free LLM API (Llama 3) for AI summaries
 pgvector==0.3.6   # pgvector SQLAlchemy integration — vector column type + operators
 fastembed==0.4.2  # Local ONNX-based embeddings — no torch, no API key needed
 
+# ── Observability ──────────────────────────────────────────────────────────────
+prometheus-fastapi-instrumentator==7.1.0  # Exposes /metrics endpoint (Prometheus format)
+
 # ── Utilities ──────────────────────────────────────────────────────────────────
 python-multipart==0.0.20  # Required by FastAPI for form data (login forms)
 email-validator==2.2.0    # Validates email addresses in Pydantic schemas

@@ -1,10 +1,15 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import settings
 from app.middleware.error_handler import register_error_handlers
+from app.middleware.request_logger import RequestLoggerMiddleware
 from app.routers import auth, books, genres, oauth, ratings, recommendations, shelves, users
+from app.utils.logging import logger, setup_logging
+
+setup_logging()
 
 API_PREFIX = "/api/v1"
 
@@ -19,7 +24,6 @@ def create_app() -> FastAPI:
     )
 
     # ── Middleware ──────────────────────────────────────────────────────────────
-    # SessionMiddleware must come before CORSMiddleware — authlib OAuth needs it
     app.add_middleware(SessionMiddleware, secret_key=settings.session_secret_key)
     app.add_middleware(
         CORSMiddleware,
@@ -28,6 +32,13 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(RequestLoggerMiddleware)
+
+    # ── Prometheus metrics — exposes GET /metrics ───────────────────────────────
+    Instrumentator(
+        should_group_status_codes=False,
+        excluded_handlers=["/health", "/metrics"],
+    ).instrument(app).expose(app, tags=["system"])
 
     # ── Error handlers ─────────────────────────────────────────────────────────
     register_error_handlers(app)
@@ -45,8 +56,32 @@ def create_app() -> FastAPI:
     # ── Health check ───────────────────────────────────────────────────────────
     @app.get("/health", tags=["system"])
     async def health_check():
-        return {"status": "ok", "environment": settings.environment}
+        from sqlalchemy import text
+        from app.database import AsyncSessionFactory
+        from app.utils.cache import cache_get
 
+        checks: dict[str, str] = {}
+
+        try:
+            async with AsyncSessionFactory() as db:
+                await db.execute(text("SELECT 1"))
+            checks["db"] = "ok"
+        except Exception as e:
+            checks["db"] = f"error: {e}"
+            logger.error("Health check DB failed", extra={"error": str(e)})
+
+        try:
+            await cache_get("__health__")
+            checks["redis"] = "ok"
+        except Exception as e:
+            checks["redis"] = f"error: {e}"
+            logger.error("Health check Redis failed", extra={"error": str(e)})
+
+        status = "ok" if all(v == "ok" for v in checks.values()) else "degraded"
+        logger.info(f"Health check: {status}", extra={"checks": checks})
+        return {"status": status, "environment": settings.environment, "checks": checks}
+
+    logger.info("good_library API started", extra={"environment": settings.environment})
     return app
 
 
